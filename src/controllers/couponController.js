@@ -2,10 +2,10 @@ import pool from "../config/database.js"
 
 // Obtener cupones disponibles (públicos)
 export const getAvailableCoupons = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
-    const result = await client.query(
+    const [rows] = await connection.query(
       `
       SELECT 
         code,
@@ -28,7 +28,7 @@ export const getAvailableCoupons = async (req, res) => {
     res.json({
       success: true,
       data: {
-        coupons: result.rows,
+        coupons: rows,
       },
     })
   } catch (error) {
@@ -38,41 +38,42 @@ export const getAvailableCoupons = async (req, res) => {
       message: "Error al obtener cupones",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Crear cupón
 export const createCoupon = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { code, discount, description, valid_from, valid_until, max_uses } = req.body
 
     // Verificar que el código no exista
-    const existingCoupon = await client.query("SELECT id FROM coupons WHERE code = $1", [code.toUpperCase()])
+    const [existingCoupon] = await connection.query("SELECT id FROM coupons WHERE code = ?", [code.toUpperCase()])
 
-    if (existingCoupon.rows.length > 0) {
+    if (existingCoupon.length > 0) {
       return res.status(409).json({
         success: false,
         message: "Ya existe un cupón con ese código",
       })
     }
 
-    const result = await client.query(
+    const [insertResult] = await connection.query(
       `
       INSERT INTO coupons (code, discount, description, valid_from, valid_until, max_uses, active)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `,
+      VALUES (?, ?, ?, ?, ?, ?, ?) `,
       [code.toUpperCase(), discount, description || null, valid_from || null, valid_until || null, max_uses || 1, true],
     )
+
+    // Obtener el cupón insertado
+    const [couponRows] = await connection.query("SELECT * FROM coupons WHERE id = ?", [insertResult.insertId])
 
     res.status(201).json({
       success: true,
       message: "Cupón creado exitosamente",
       data: {
-        coupon: result.rows[0],
+        coupon: couponRows[0],
       },
     })
   } catch (error) {
@@ -82,13 +83,13 @@ export const createCoupon = async (req, res) => {
       message: "Error al crear cupón",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Obtener todos los cupones
 export const getAllCoupons = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { active } = req.query
@@ -106,7 +107,7 @@ export const getAllCoupons = async (req, res) => {
 
     if (active !== undefined) {
       params.push(active === "true")
-      query += ` AND c.active = $${params.length}`
+      query += ` AND c.active = ?`
     }
 
     query += `
@@ -114,12 +115,12 @@ export const getAllCoupons = async (req, res) => {
       ORDER BY c.created_at DESC
     `
 
-    const result = await client.query(query, params)
+    const [result] = await connection.query(query, params)
 
     res.json({
       success: true,
       data: {
-        coupons: result.rows.map((c) => ({
+        coupons: result.map((c) => ({
           ...c,
           unique_users: Number.parseInt(c.unique_users),
         })),
@@ -132,13 +133,13 @@ export const getAllCoupons = async (req, res) => {
       message: "Error al obtener cupones",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Actualizar cupón
 export const updateCoupon = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
@@ -146,31 +147,30 @@ export const updateCoupon = async (req, res) => {
 
     const updates = []
     const params = []
-    let paramCount = 1
 
     if (discount !== undefined) {
       params.push(discount)
-      updates.push(`discount = $${paramCount++}`)
+      updates.push(`discount = ?`)
     }
     if (description !== undefined) {
       params.push(description)
-      updates.push(`description = $${paramCount++}`)
+      updates.push(`description = ?`)
     }
     if (valid_from !== undefined) {
       params.push(valid_from)
-      updates.push(`valid_from = $${paramCount++}`)
+      updates.push(`valid_from = ?`)
     }
     if (valid_until !== undefined) {
       params.push(valid_until)
-      updates.push(`valid_until = $${paramCount++}`)
+      updates.push(`valid_until = ?`)
     }
     if (max_uses !== undefined) {
       params.push(max_uses)
-      updates.push(`max_uses = $${paramCount++}`)
+      updates.push(`max_uses = ?`)
     }
     if (active !== undefined) {
       params.push(active)
-      updates.push(`active = $${paramCount++}`)
+      updates.push(`active = ?`)
     }
 
     if (updates.length === 0) {
@@ -184,24 +184,28 @@ export const updateCoupon = async (req, res) => {
     const query = `
       UPDATE coupons
       SET ${updates.join(", ")}
-      WHERE id = $${paramCount}
-      RETURNING *
-    `
+      WHERE id = ? `
 
-    const result = await client.query(query, params)
+    const [updateResult] = await connection.query(query, params)
 
-    if (result.rows.length === 0) {
+    if (!updateResult || updateResult.affectedRows === 0) {
       return res.status(404).json({
         success: false,
         message: "Cupón no encontrado",
       })
     }
 
+    // Obtener el cupón actualizado
+    const [couponRows] = await connection.query(
+      "SELECT * FROM coupons WHERE id = ?",
+      [id]
+    )
+
     res.json({
       success: true,
       message: "Cupón actualizado exitosamente",
       data: {
-        coupon: result.rows[0],
+        coupon: couponRows[0],
       },
     })
   } catch (error) {
@@ -211,29 +215,27 @@ export const updateCoupon = async (req, res) => {
       message: "Error al actualizar cupón",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Eliminar cupón
 export const deleteCoupon = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
 
     // Soft delete - marcar como inactivo
-    const result = await client.query(
+    const [updateResult] = await connection.query(
       `
       UPDATE coupons
       SET active = false
-      WHERE id = $1
-      RETURNING *
-    `,
+      WHERE id = ? `,
       [id],
     )
 
-    if (result.rows.length === 0) {
+    if (!updateResult || updateResult.affectedRows === 0) {
       return res.status(404).json({
         success: false,
         message: "Cupón no encontrado",
@@ -251,6 +253,6 @@ export const deleteCoupon = async (req, res) => {
       message: "Error al eliminar cupón",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }

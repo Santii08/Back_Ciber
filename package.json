@@ -9,7 +9,9 @@
     "dev": "nodemon src/server.js",
     "migrate": "node src/database/migrate.js",
     "seed": "node src/database/seed.js",
-    "reset-db": "node src/database/reset.js"
+    "reset-db": "node src/database/reset.js",
+    "test": "newman run tests/postman_collection.json -e tests/postman_environment.json",
+    "test:report": "newman run tests/postman_collection.json -e tests/postman_environment.json --reporters cli,htmlextra --reporter-htmlextra-export test-results/report.html"
   },
   "keywords": ["ecommerce", "api", "security"],
   "author": "Antipinzas Group",

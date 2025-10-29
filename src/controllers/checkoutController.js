@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid"
 
 // Validar cupón
 export const validateCoupon = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { code } = req.body
@@ -17,22 +17,22 @@ export const validateCoupon = async (req, res) => {
     }
 
     // Buscar cupón
-    const couponResult = await client.query(
+    const [couponResult] = await connection.query(
       `
       SELECT * FROM coupons
-      WHERE code = $1 AND active = true
+      WHERE code = ? AND active = true
     `,
       [code.trim().toUpperCase()],
     )
 
-    if (couponResult.rows.length === 0) {
+    if (couponResult.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Cupón no válido o expirado",
       })
     }
 
-    const coupon = couponResult.rows[0]
+    const coupon = couponResult[0]
 
     // Verificar fecha de validez
     const now = new Date()
@@ -59,15 +59,15 @@ export const validateCoupon = async (req, res) => {
     }
 
     // Verificar si el usuario ya usó este cupón
-    const usageCheck = await client.query(
+    const [usageCheck] = await connection.query(
       `
       SELECT id FROM coupon_usage
-      WHERE user_id = $1 AND coupon_id = $2
+      WHERE user_id = ? AND coupon_id = ?
     `,
       [userId, coupon.id],
     )
 
-    if (usageCheck.rows.length > 0) {
+    if (usageCheck.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Ya has usado este cupón anteriormente",
@@ -92,16 +92,16 @@ export const validateCoupon = async (req, res) => {
       message: "Error al validar cupón",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Procesar checkout
 export const processCheckout = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
-    await client.query("BEGIN")
+    await connection.query("BEGIN")
 
     const { items, coupon_code, payment_token, last4, expiry, card_type } = req.body
     const userId = req.user.id
@@ -111,27 +111,27 @@ export const processCheckout = async (req, res) => {
     const validatedItems = []
 
     for (const item of items) {
-      const productResult = await client.query(
+      const [productResult] = await connection.query(
         `
         SELECT id, name, price, stock
         FROM products
-        WHERE id = $1 AND active = true
+        WHERE id = ? AND active = true
       `,
         [item.product_id],
       )
 
-      if (productResult.rows.length === 0) {
-        await client.query("ROLLBACK")
+      if (productResult.length === 0) {
+        await connection.query("ROLLBACK")
         return res.status(404).json({
           success: false,
           message: `Producto con ID ${item.product_id} no encontrado`,
         })
       }
 
-      const product = productResult.rows[0]
+      const product = productResult[0]
 
       if (product.stock < item.quantity) {
-        await client.query("ROLLBACK")
+        await connection.query("ROLLBACK")
         return res.status(400).json({
           success: false,
           message: `Stock insuficiente para ${product.name}. Disponible: ${product.stock}`,
@@ -155,16 +155,16 @@ export const processCheckout = async (req, res) => {
     let couponId = null
 
     if (coupon_code) {
-      const couponResult = await client.query(
+      const [couponResult] = await connection.query(
         `
         SELECT * FROM coupons
-        WHERE code = $1 AND active = true
+        WHERE code = ? AND active = true
       `,
         [coupon_code.trim().toUpperCase()],
       )
 
-      if (couponResult.rows.length > 0) {
-        const coupon = couponResult.rows[0]
+      if (couponResult.length > 0) {
+        const coupon = couponResult[0]
 
         // Verificar validez del cupón
         const now = new Date()
@@ -175,15 +175,15 @@ export const processCheckout = async (req, res) => {
 
         if (isValid) {
           // Verificar si el usuario ya usó este cupón
-          const usageCheck = await client.query(
+          const [usageCheck] = await connection.query(
             `
             SELECT id FROM coupon_usage
-            WHERE user_id = $1 AND coupon_id = $2
+            WHERE user_id = ? AND coupon_id = ?
           `,
             [userId, coupon.id],
           )
 
-          if (usageCheck.rows.length === 0) {
+          if (usageCheck.length === 0) {
             discount = (total * coupon.discount) / 100
             couponId = coupon.id
           }
@@ -194,33 +194,31 @@ export const processCheckout = async (req, res) => {
     const finalTotal = total - discount
 
     // 3. Crear orden
-    const orderResult = await client.query(
+    const [orderResult] = await connection.query(
       `
       INSERT INTO orders (user_id, total, discount, final_total, coupon_code, status)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `,
+      VALUES (?, ?, ?, ?, ?, ?) `,
       [userId, total, discount, finalTotal, coupon_code || null, "pending"],
     )
 
-    const order = orderResult.rows[0]
+    const orderId = orderResult.insertId
 
     // 4. Crear items de la orden
     for (const item of validatedItems) {
-      await client.query(
+      await connection.query(
         `
         INSERT INTO order_items (order_id, product_id, quantity, price, subtotal)
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES (?, ?, ?, ?, ?)
       `,
-        [order.id, item.product_id, item.quantity, item.price, item.subtotal],
+        [orderId, item.product_id, item.quantity, item.price, item.subtotal],
       )
 
       // Actualizar stock del producto
-      await client.query(
+      await connection.query(
         `
         UPDATE products
-        SET stock = stock - $1
-        WHERE id = $2
+        SET stock = stock - ?
+        WHERE id = ?
       `,
         [item.quantity, item.product_id],
       )
@@ -228,62 +226,66 @@ export const processCheckout = async (req, res) => {
 
     // 5. Simular pago (NO GUARDAR DATOS REALES)
     // Solo guardamos token simulado y últimos 4 dígitos enmascarados
-    const paymentResult = await client.query(
+    const [paymentResult] = await connection.query(
       `
       INSERT INTO payments (order_id, payment_token, last4, expiry_masked, card_type, status)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `,
-      [order.id, payment_token || uuidv4(), last4, expiry, card_type || "unknown", "approved"],
+      VALUES (?, ?, ?, ?, ?, ?) `,
+      [orderId, payment_token || uuidv4(), last4, expiry, card_type || "unknown", "approved"],
     )
 
     // 6. Actualizar estado de la orden
-    await client.query(
+    await connection.query(
       `
       UPDATE orders
       SET status = 'completed'
-      WHERE id = $1
+      WHERE id = ?
     `,
-      [order.id],
+      [orderId],
     )
 
     // 7. Registrar uso del cupón si se aplicó
     if (couponId) {
-      await client.query(
+      await connection.query(
         `
         INSERT INTO coupon_usage (user_id, coupon_id)
-        VALUES ($1, $2)
+        VALUES (?, ?)
       `,
         [userId, couponId],
       )
 
-      await client.query(
+      await connection.query(
         `
         UPDATE coupons
         SET times_used = times_used + 1
-        WHERE id = $1
+        WHERE id = ?
       `,
         [couponId],
       )
     }
 
-    await client.query("COMMIT")
+    await connection.query("COMMIT")
+
+    // Obtener la orden completa
+    const [orderDetails] = await connection.query(
+      "SELECT * FROM orders WHERE id = ?",
+      [orderId]
+    )
 
     res.status(201).json({
       success: true,
       message: "Compra procesada exitosamente",
       data: {
         order: {
-          id: order.id,
+          id: orderId,
           total,
           discount,
           final_total: finalTotal,
           coupon_code: coupon_code || null,
           status: "completed",
-          created_at: order.created_at,
+          created_at: orderDetails[0].created_at,
         },
         payment: {
-          id: paymentResult.rows[0].id,
+          id: paymentResult.insertId,
           last4,
           status: "approved",
         },
@@ -291,14 +293,14 @@ export const processCheckout = async (req, res) => {
       },
     })
   } catch (error) {
-    await client.query("ROLLBACK")
+    await connection.query("ROLLBACK")
     console.error("Error procesando checkout:", error)
     res.status(500).json({
       success: false,
       message: "Error al procesar la compra",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 

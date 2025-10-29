@@ -17,11 +17,68 @@ Backend seguro para el e-commerce de Arepabuelas de la esquina. Proyecto académ
 
 ## Requisitos
 
+### Opción 1: Con Docker (Recomendado)
+- Docker Desktop instalado
+- Docker Compose incluido
+
+### Opción 2: Instalación Manual
 - Node.js 18+
 - MySQL 8.0+ (o MariaDB 10.5+)
 - npm o yarn
 
-## Instalación
+## 🐳 Instalación con Docker (Recomendado)
+
+La forma más rápida de ejecutar la aplicación es usando Docker. Todo está preconfigurado.
+
+### Inicio Rápido
+
+1. **Clonar el repositorio**
+   ```bash
+   cd backend
+   ```
+
+2. **Configurar variables de entorno** (opcional)
+   ```bash
+   cp .env.docker .env
+   ```
+   Edita `.env` si necesitas cambiar puertos, contraseñas, etc.
+
+3. **Levantar los contenedores**
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **¡Listo!** La aplicación estará disponible en `http://localhost:3001`
+
+El comando anterior:
+- ✅ Descarga e instala MySQL 8.0
+- ✅ Construye la imagen del backend
+- ✅ Crea la base de datos automáticamente
+- ✅ Ejecuta las migraciones
+- ✅ Puebla la base de datos con datos de ejemplo
+- ✅ Inicia el servidor
+
+### Comandos Docker Útiles
+
+```bash
+# Ver logs
+docker-compose logs -f
+
+# Detener contenedores
+docker-compose stop
+
+# Detener y eliminar contenedores
+docker-compose down
+
+# Reconstruir después de cambios
+docker-compose up -d --build
+```
+
+📖 **Documentación completa de Docker**: Ver [README.Docker.md](./README.Docker.md)
+
+---
+
+## 🔧 Instalación Manual
 
 ### 1. Clonar el repositorio
 
@@ -144,6 +201,45 @@ npm start
 - `GET /api/orders` - Historial de compras del usuario (requiere auth)
 - `GET /api/orders/:id` - Detalle de una orden (requiere auth)
 
+📖 **Documentación completa de la API**: Ver [API_DOCUMENTATION.md](./API_DOCUMENTATION.md)
+
+---
+
+## 🧪 Pruebas de API
+
+Este proyecto incluye pruebas automatizadas con Newman/Postman en la carpeta `tests/`.
+
+### Ejecutar Pruebas
+
+```bash
+# 1. Instalar Newman (solo primera vez)
+npm install -g newman newman-reporter-htmlextra
+
+# 2. Asegurarse de que el servidor esté corriendo
+npm start
+# o con Docker: docker-compose up -d
+
+# 3. Ejecutar pruebas
+npm test
+
+# Con reporte HTML detallado
+npm run test:report
+```
+
+El reporte se genera en `test-results/report.html`.
+
+**Lo que se prueba:**
+- ✅ Autenticación y autorización
+- ✅ CRUD de productos
+- ✅ Sistema de comentarios
+- ✅ Cupones y descuentos
+- ✅ Checkout y órdenes
+- ✅ Seguridad (tokens, permisos)
+
+📖 **Más información**: Ver [tests/README.md](./tests/README.md)
+
+---
+
 ## Seguridad Implementada
 
 1. **Autenticación JWT**: Tokens seguros con expiración
@@ -190,8 +286,14 @@ backend/
 │   ├── routes/
 │   ├── controllers/
 │   └── server.js
+├── tests/
+│   ├── postman_collection.json
+│   ├── postman_environment.json
+│   └── README.md
 ├── uploads/
-├── .env.example
+├── .env.docker
+├── docker-compose.yml
+├── Dockerfile
 ├── package.json
 └── README.md
 \`\`\`

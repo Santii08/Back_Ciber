@@ -18,18 +18,18 @@ export const authenticateToken = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
     // Obtener usuario de la base de datos
-    const result = await pool.query("SELECT id, name, email, role, validated, photo FROM users WHERE id = $1", [
+    const [result] = await pool.query("SELECT id, name, email, role, validated, photo FROM users WHERE id = ?", [
       decoded.userId,
     ])
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       return res.status(401).json({
         success: false,
         message: "Usuario no encontrado",
       })
     }
 
-    const user = result.rows[0]
+    const user = result[0]
 
     // Verificar si el usuario está validado
     if (!user.validated) {
@@ -92,12 +92,12 @@ export const optionalAuth = async (req, res, next) => {
 
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET)
-      const result = await pool.query("SELECT id, name, email, role, validated, photo FROM users WHERE id = $1", [
+      const [result] = await pool.query("SELECT id, name, email, role, validated, photo FROM users WHERE id = ?", [
         decoded.userId,
       ])
 
-      if (result.rows.length > 0 && result.rows[0].validated) {
-        req.user = result.rows[0]
+      if (result.length > 0 && result[0].validated) {
+        req.user = result[0]
       }
     }
   } catch (error) {

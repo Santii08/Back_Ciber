@@ -11,15 +11,15 @@ const generateToken = (userId) => {
 
 // Registro de usuario
 export const register = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { name, email, password, photo } = req.body
 
     // Verificar si el email ya existe
-    const existingUser = await client.query("SELECT id FROM users WHERE email = $1", [email])
+    const [existingUser] = await connection.query("SELECT id FROM users WHERE email = ?", [email])
 
-    if (existingUser.rows.length > 0) {
+    if (existingUser.length > 0) {
       return res.status(409).json({
         success: false,
         message: "El email ya está registrado",
@@ -31,17 +31,20 @@ export const register = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, saltRounds)
 
     // Insertar usuario (no validado por defecto)
-    const result = await client.query(
+    const [insertResult] = await connection.query(
       `
       INSERT INTO users (name, email, password_hash, photo, role, validated)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, name, email, photo, role, validated, created_at
-    `,
+      VALUES (?, ?, ?, ?, ?, ?) `,
       [name, email, passwordHash, photo || null, "user", false],
     )
 
-    const user = result.rows[0]
-
+    // Obtener el usuario insertado
+    const [userRows] = await connection.query(
+      "SELECT id, name, email, photo, role, validated, created_at FROM users WHERE id = ?",
+      [insertResult.insertId]
+    )
+    const user = userRows[0]
+    user.validated = Boolean(user.validated)
     res.status(201).json({
       success: true,
       message: "Usuario registrado exitosamente. Espera la validación del administrador.",
@@ -64,28 +67,28 @@ export const register = async (req, res) => {
       message: "Error al registrar usuario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Login de usuario
 export const login = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { email, password } = req.body
 
     // Buscar usuario por email
-    const result = await client.query("SELECT * FROM users WHERE email = $1", [email])
+    const [rows] = await connection.query("SELECT * FROM users WHERE email = ?", [email])
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(401).json({
         success: false,
         message: "Credenciales inválidas",
       })
     }
 
-    const user = result.rows[0]
+    const user = rows[0]
 
     // Verificar contraseña
     const isValidPassword = await bcrypt.compare(password, user.password_hash)
@@ -108,6 +111,8 @@ export const login = async (req, res) => {
     // Generar token
     const token = generateToken(user.id)
 
+    const outUser = { ...user, validated: Boolean(user.validated) }
+
     res.json({
       success: true,
       message: "Inicio de sesión exitoso",
@@ -119,7 +124,7 @@ export const login = async (req, res) => {
           email: user.email,
           photo: user.photo,
           role: user.role,
-          validated: user.validated,
+          validated: outUser.validated,
         },
       },
     })
@@ -130,13 +135,14 @@ export const login = async (req, res) => {
       message: "Error al iniciar sesión",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Obtener usuario actual
 export const getCurrentUser = async (req, res) => {
   try {
+    if (req.user && req.user.validated !== undefined) req.user.validated = Boolean(req.user.validated)
     res.json({
       success: true,
       data: {

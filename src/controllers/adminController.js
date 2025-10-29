@@ -2,10 +2,10 @@ import pool from "../config/database.js"
 
 // Listar usuarios no validados
 export const getPendingUsers = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
-    const result = await client.query(
+    const [result] = await connection.query(
       `
       SELECT id, name, email, photo, role, validated, created_at
       FROM users
@@ -17,8 +17,8 @@ export const getPendingUsers = async (req, res) => {
     res.json({
       success: true,
       data: {
-        users: result.rows,
-        count: result.rows.length,
+        users: result.map(u => ({ ...u, validated: Boolean(u.validated) })),
+        count: result.length,
       },
     })
   } catch (error) {
@@ -28,28 +28,28 @@ export const getPendingUsers = async (req, res) => {
       message: "Error al obtener usuarios pendientes",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Validar usuario
 export const validateUser = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
 
     // Verificar que el usuario existe y no está validado
-    const userCheck = await client.query("SELECT id, validated, role FROM users WHERE id = $1", [id])
+    const [userCheck] = await connection.query("SELECT id, validated, role FROM users WHERE id = ?", [id])
 
-    if (userCheck.rows.length === 0) {
+    if (userCheck.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Usuario no encontrado",
       })
     }
 
-    const user = userCheck.rows[0]
+    const user = userCheck[0]
 
     if (user.validated) {
       return res.status(400).json({
@@ -66,21 +66,27 @@ export const validateUser = async (req, res) => {
     }
 
     // Validar usuario
-    const result = await client.query(
+    await connection.query(
       `
       UPDATE users
       SET validated = true, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
-      RETURNING id, name, email, photo, role, validated, updated_at
-    `,
+      WHERE id = ? `,
       [id],
     )
+
+    // Obtener usuario actualizado
+    const [updatedUser] = await connection.query(
+      "SELECT id, name, email, photo, role, validated, updated_at FROM users WHERE id = ?",
+      [id]
+    )
+
+    const up = updatedUser[0]
 
     res.json({
       success: true,
       message: "Usuario validado exitosamente",
       data: {
-        user: result.rows[0],
+        user: { ...up, validated: Boolean(up.validated) },
       },
     })
   } catch (error) {
@@ -90,13 +96,13 @@ export const validateUser = async (req, res) => {
       message: "Error al validar usuario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Listar todos los usuarios (admin)
 export const getAllUsers = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { validated, role } = req.query
@@ -110,23 +116,23 @@ export const getAllUsers = async (req, res) => {
 
     if (validated !== undefined) {
       params.push(validated === "true")
-      query += ` AND validated = $${params.length}`
+      query += ` AND validated = ?`
     }
 
     if (role) {
       params.push(role)
-      query += ` AND role = $${params.length}`
+      query += ` AND role = ?`
     }
 
     query += " ORDER BY created_at DESC"
 
-    const result = await client.query(query, params)
+    const [result] = await connection.query(query, params)
 
     res.json({
       success: true,
       data: {
-        users: result.rows,
-        count: result.rows.length,
+        users: result.map(u => ({ ...u, validated: Boolean(u.validated) })),
+        count: result.length,
       },
     })
   } catch (error) {
@@ -136,13 +142,13 @@ export const getAllUsers = async (req, res) => {
       message: "Error al obtener usuarios",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Eliminar usuario (admin)
 export const deleteUser = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
@@ -156,9 +162,9 @@ export const deleteUser = async (req, res) => {
     }
 
     // Verificar que el usuario existe
-    const userCheck = await client.query("SELECT id, role FROM users WHERE id = $1", [id])
+    const [userCheck] = await connection.query("SELECT id, role FROM users WHERE id = ?", [id])
 
-    if (userCheck.rows.length === 0) {
+    if (userCheck.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Usuario no encontrado",
@@ -166,7 +172,7 @@ export const deleteUser = async (req, res) => {
     }
 
     // Eliminar usuario (cascade eliminará sus comentarios, órdenes, etc.)
-    await client.query("DELETE FROM users WHERE id = $1", [id])
+    await connection.query("DELETE FROM users WHERE id = ?", [id])
 
     res.json({
       success: true,
@@ -179,6 +185,6 @@ export const deleteUser = async (req, res) => {
       message: "Error al eliminar usuario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }

@@ -2,7 +2,7 @@ import pool from "../config/database.js"
 
 // Agregar comentario a un producto
 export const addComment = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id: productId } = req.params
@@ -10,9 +10,9 @@ export const addComment = async (req, res) => {
     const userId = req.user.id
 
     // Verificar que el producto existe
-    const productCheck = await client.query("SELECT id FROM products WHERE id = $1 AND active = true", [productId])
+    const [productCheck] = await connection.query("SELECT id FROM products WHERE id = ? AND active = true", [productId])
 
-    if (productCheck.rows.length === 0) {
+    if (productCheck.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Producto no encontrado",
@@ -20,12 +20,12 @@ export const addComment = async (req, res) => {
     }
 
     // Verificar si el usuario ya comentó este producto
-    const existingComment = await client.query("SELECT id FROM comments WHERE user_id = $1 AND product_id = $2", [
+    const [existingComment] = await connection.query("SELECT id FROM comments WHERE user_id = ? AND product_id = ?", [
       userId,
       productId,
     ])
 
-    if (existingComment.rows.length > 0) {
+    if (existingComment.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Ya has comentado este producto. Puedes editar tu comentario existente.",
@@ -33,17 +33,15 @@ export const addComment = async (req, res) => {
     }
 
     // Insertar comentario
-    const result = await client.query(
+    const [insertResult] = await connection.query(
       `
       INSERT INTO comments (user_id, product_id, content, rating)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `,
+      VALUES (?, ?, ?, ?) `,
       [userId, productId, content, rating || null],
     )
 
     // Obtener información del usuario para la respuesta
-    const commentWithUser = await client.query(
+    const [commentWithUser] = await connection.query(
       `
       SELECT 
         c.*,
@@ -51,16 +49,16 @@ export const addComment = async (req, res) => {
         u.photo as user_photo
       FROM comments c
       JOIN users u ON c.user_id = u.id
-      WHERE c.id = $1
+      WHERE c.id = ?
     `,
-      [result.rows[0].id],
+      [insertResult.insertId],
     )
 
     res.status(201).json({
       success: true,
       message: "Comentario agregado exitosamente",
       data: {
-        comment: commentWithUser.rows[0],
+        comment: commentWithUser[0],
       },
     })
   } catch (error) {
@@ -70,22 +68,22 @@ export const addComment = async (req, res) => {
       message: "Error al agregar comentario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Obtener comentarios de un producto
 export const getProductComments = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id: productId } = req.params
     const { limit, offset } = req.query
 
     // Verificar que el producto existe
-    const productCheck = await client.query("SELECT id FROM products WHERE id = $1", [productId])
+    const productCheck = await connection.query("SELECT id FROM products WHERE id = ?", [productId])
 
-    if (productCheck.rows.length === 0) {
+    if (productCheck[0].length === 0) {
       return res.status(404).json({
         success: false,
         message: "Producto no encontrado",
@@ -99,7 +97,7 @@ export const getProductComments = async (req, res) => {
         u.photo as user_photo
       FROM comments c
       JOIN users u ON c.user_id = u.id
-      WHERE c.product_id = $1
+      WHERE c.product_id = ?
       ORDER BY c.created_at DESC
     `
     const params = [productId]
@@ -107,24 +105,24 @@ export const getProductComments = async (req, res) => {
     // Paginación
     if (limit) {
       params.push(Number.parseInt(limit))
-      query += ` LIMIT $${params.length}`
+      query += ` LIMIT ?`
     }
 
     if (offset) {
       params.push(Number.parseInt(offset))
-      query += ` OFFSET $${params.length}`
+      query += ` OFFSET ?`
     }
 
-    const result = await client.query(query, params)
+    const [result] = await connection.query(query, params)
 
     // Obtener total de comentarios
-    const countResult = await client.query("SELECT COUNT(*) FROM comments WHERE product_id = $1", [productId])
-    const total = Number.parseInt(countResult.rows[0].count)
+    const [countResult] = await connection.query("SELECT COUNT(*) as count FROM comments WHERE product_id = ?", [productId])
+    const total = Number.parseInt(countResult[0].count)
 
     res.json({
       success: true,
       data: {
-        comments: result.rows,
+        comments: result,
         total,
         limit: limit ? Number.parseInt(limit) : null,
         offset: offset ? Number.parseInt(offset) : null,
@@ -137,13 +135,13 @@ export const getProductComments = async (req, res) => {
       message: "Error al obtener comentarios",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Actualizar comentario propio
 export const updateComment = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { commentId } = req.params
@@ -151,16 +149,16 @@ export const updateComment = async (req, res) => {
     const userId = req.user.id
 
     // Verificar que el comentario existe y pertenece al usuario
-    const commentCheck = await client.query("SELECT id, user_id FROM comments WHERE id = $1", [commentId])
+    const [commentCheck] = await connection.query("SELECT id, user_id FROM comments WHERE id = ?", [commentId])
 
-    if (commentCheck.rows.length === 0) {
+    if (commentCheck.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Comentario no encontrado",
       })
     }
 
-    if (commentCheck.rows[0].user_id !== userId) {
+    if (commentCheck[0].user_id !== userId) {
       return res.status(403).json({
         success: false,
         message: "No tienes permiso para editar este comentario",
@@ -170,15 +168,14 @@ export const updateComment = async (req, res) => {
     // Actualizar comentario
     const updates = []
     const params = []
-    let paramCount = 1
 
     if (content !== undefined) {
       params.push(content)
-      updates.push(`content = $${paramCount++}`)
+      updates.push(`content = ?`)
     }
     if (rating !== undefined) {
       params.push(rating)
-      updates.push(`rating = $${paramCount++}`)
+      updates.push(`rating = ?`)
     }
 
     if (updates.length === 0) {
@@ -192,14 +189,12 @@ export const updateComment = async (req, res) => {
     const query = `
       UPDATE comments
       SET ${updates.join(", ")}
-      WHERE id = $${paramCount}
-      RETURNING *
-    `
+      WHERE id = ? `
 
-    const result = await client.query(query, params)
+    await connection.query(query, params)
 
     // Obtener información del usuario
-    const commentWithUser = await client.query(
+    const [commentWithUser] = await connection.query(
       `
       SELECT 
         c.*,
@@ -207,7 +202,7 @@ export const updateComment = async (req, res) => {
         u.photo as user_photo
       FROM comments c
       JOIN users u ON c.user_id = u.id
-      WHERE c.id = $1
+      WHERE c.id = ?
     `,
       [commentId],
     )
@@ -216,7 +211,7 @@ export const updateComment = async (req, res) => {
       success: true,
       message: "Comentario actualizado exitosamente",
       data: {
-        comment: commentWithUser.rows[0],
+        comment: commentWithUser[0],
       },
     })
   } catch (error) {
@@ -226,13 +221,13 @@ export const updateComment = async (req, res) => {
       message: "Error al actualizar comentario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Eliminar comentario
 export const deleteComment = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { commentId } = req.params
@@ -240,17 +235,16 @@ export const deleteComment = async (req, res) => {
     const isAdmin = req.user.role === "admin"
 
     // Verificar que el comentario existe
-    const commentCheck = await client.query("SELECT id, user_id FROM comments WHERE id = $1", [commentId])
+    const [commentCheck] = await connection.query("SELECT id, user_id FROM comments WHERE id = ?", [commentId])
 
-    if (commentCheck.rows.length === 0) {
+    if (commentCheck.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Comentario no encontrado",
       })
     }
-
     // Solo el autor o un admin pueden eliminar
-    if (commentCheck.rows[0].user_id !== userId && !isAdmin) {
+    if (commentCheck[0].user_id !== userId && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: "No tienes permiso para eliminar este comentario",
@@ -258,7 +252,7 @@ export const deleteComment = async (req, res) => {
     }
 
     // Eliminar comentario
-    await client.query("DELETE FROM comments WHERE id = $1", [commentId])
+    await connection.query("DELETE FROM comments WHERE id = ?", [commentId])
 
     res.json({
       success: true,
@@ -271,6 +265,6 @@ export const deleteComment = async (req, res) => {
       message: "Error al eliminar comentario",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }

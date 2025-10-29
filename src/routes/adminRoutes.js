@@ -10,6 +10,7 @@ router.use(authenticateToken, requireAdmin)
 
 // Gestión de usuarios
 router.get("/users", getAllUsers)
+router.get("/users/all", getAllUsers)
 router.get("/users/pending", getPendingUsers)
 router.patch("/validate/:id", validateId, validateUser)
 router.delete("/users/:id", validateId, deleteUser)

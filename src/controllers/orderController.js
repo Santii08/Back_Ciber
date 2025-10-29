@@ -2,7 +2,7 @@ import pool from "../config/database.js"
 
 // Obtener historial de órdenes del usuario
 export const getUserOrders = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const userId = req.user.id
@@ -19,14 +19,14 @@ export const getUserOrders = async (req, res) => {
       FROM orders o
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN payments p ON o.id = p.order_id
-      WHERE o.user_id = $1
+      WHERE o.user_id = ?
     `
     const params = [userId]
 
     // Filtrar por estado si se especifica
     if (status) {
       params.push(status)
-      query += ` AND o.status = $${params.length}`
+      query += ` AND o.status = ?`
     }
 
     query += `
@@ -37,24 +37,24 @@ export const getUserOrders = async (req, res) => {
     // Paginación
     if (limit) {
       params.push(Number.parseInt(limit))
-      query += ` LIMIT $${params.length}`
+      query += ` LIMIT ?`
     }
 
     if (offset) {
       params.push(Number.parseInt(offset))
-      query += ` OFFSET $${params.length}`
+      query += ` OFFSET ?`
     }
 
-    const result = await client.query(query, params)
+    const [result] = await connection.query(query, params)
 
     // Obtener total de órdenes
-    const countResult = await client.query("SELECT COUNT(*) FROM orders WHERE user_id = $1", [userId])
-    const total = Number.parseInt(countResult.rows[0].count)
+    const [countResult] = await connection.query("SELECT COUNT(*) as count FROM orders WHERE user_id = ?", [userId])
+    const total = Number.parseInt(countResult[0].count)
 
     res.json({
       success: true,
       data: {
-        orders: result.rows.map((order) => ({
+        orders: result.map((order) => ({
           ...order,
           items_count: Number.parseInt(order.items_count),
         })),
@@ -70,13 +70,13 @@ export const getUserOrders = async (req, res) => {
       message: "Error al obtener historial de órdenes",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Obtener detalle de una orden específica
 export const getOrderById = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
@@ -84,7 +84,7 @@ export const getOrderById = async (req, res) => {
     const isAdmin = req.user.role === "admin"
 
     // Obtener orden
-    const orderResult = await client.query(
+    const [orderRows] = await connection.query(
       `
       SELECT 
         o.*,
@@ -96,19 +96,18 @@ export const getOrderById = async (req, res) => {
         p.created_at as payment_date
       FROM orders o
       LEFT JOIN payments p ON o.id = p.order_id
-      WHERE o.id = $1
+      WHERE o.id = ?
     `,
       [id],
     )
-
-    if (orderResult.rows.length === 0) {
+    if (orderRows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Orden no encontrada",
       })
     }
 
-    const order = orderResult.rows[0]
+    const order = orderRows[0]
 
     // Verificar que la orden pertenece al usuario (a menos que sea admin)
     if (order.user_id !== userId && !isAdmin) {
@@ -119,7 +118,7 @@ export const getOrderById = async (req, res) => {
     }
 
     // Obtener items de la orden
-    const itemsResult = await client.query(
+    const [itemsResult] = await connection.query(
       `
       SELECT 
         oi.*,
@@ -127,7 +126,7 @@ export const getOrderById = async (req, res) => {
         p.image_url as product_image
       FROM order_items oi
       JOIN products p ON oi.product_id = p.id
-      WHERE oi.order_id = $1
+      WHERE oi.order_id = ?
       ORDER BY oi.id
     `,
       [id],
@@ -136,22 +135,22 @@ export const getOrderById = async (req, res) => {
     // Obtener información del usuario si es admin
     let userInfo = null
     if (isAdmin) {
-      const userResult = await client.query(
+      const [userResult] = await connection.query(
         `
         SELECT id, name, email, photo
         FROM users
-        WHERE id = $1
+        WHERE id = ?
       `,
         [order.user_id],
       )
-      userInfo = userResult.rows[0]
+      userInfo = userResult[0]
     }
 
     res.json({
       success: true,
       data: {
         order,
-        items: itemsResult.rows,
+        items: itemsResult,
         ...(isAdmin && { user: userInfo }),
       },
     })
@@ -162,19 +161,19 @@ export const getOrderById = async (req, res) => {
       message: "Error al obtener detalle de orden",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Obtener estadísticas de compras del usuario
 export const getUserStats = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const userId = req.user.id
 
     // Estadísticas generales
-    const statsResult = await client.query(
+    const [statsRows] = await connection.query(
       `
       SELECT 
         COUNT(*) as total_orders,
@@ -184,13 +183,13 @@ export const getUserStats = async (req, res) => {
         COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_orders,
         COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders
       FROM orders
-      WHERE user_id = $1
+      WHERE user_id = ?
     `,
       [userId],
     )
 
     // Productos más comprados
-    const topProductsResult = await client.query(
+    const [topProductsRows] = await connection.query(
       `
       SELECT 
         p.id,
@@ -201,7 +200,7 @@ export const getUserStats = async (req, res) => {
       FROM order_items oi
       JOIN products p ON oi.product_id = p.id
       JOIN orders o ON oi.order_id = o.id
-      WHERE o.user_id = $1 AND o.status = 'completed'
+      WHERE o.user_id = ? AND o.status = 'completed'
       GROUP BY p.id, p.name, p.image_url
       ORDER BY times_purchased DESC
       LIMIT 5
@@ -210,7 +209,7 @@ export const getUserStats = async (req, res) => {
     )
 
     // Cupones usados
-    const couponsResult = await client.query(
+    const [couponsRows] = await connection.query(
       `
       SELECT 
         c.code,
@@ -219,7 +218,7 @@ export const getUserStats = async (req, res) => {
         cu.used_at
       FROM coupon_usage cu
       JOIN coupons c ON cu.coupon_id = c.id
-      WHERE cu.user_id = $1
+      WHERE cu.user_id = ?
       ORDER BY cu.used_at DESC
     `,
       [userId],
@@ -229,17 +228,17 @@ export const getUserStats = async (req, res) => {
       success: true,
       data: {
         stats: {
-          ...statsResult.rows[0],
-          total_orders: Number.parseInt(statsResult.rows[0].total_orders),
-          completed_orders: Number.parseInt(statsResult.rows[0].completed_orders),
-          pending_orders: Number.parseInt(statsResult.rows[0].pending_orders),
-          cancelled_orders: Number.parseInt(statsResult.rows[0].cancelled_orders),
+          ...statsRows[0],
+          total_orders: Number.parseInt(statsRows[0].total_orders),
+          completed_orders: Number.parseInt(statsRows[0].completed_orders),
+          pending_orders: Number.parseInt(statsRows[0].pending_orders),
+          cancelled_orders: Number.parseInt(statsRows[0].cancelled_orders),
         },
-        top_products: topProductsResult.rows.map((p) => ({
+        top_products: topProductsRows.map((p) => ({
           ...p,
           times_purchased: Number.parseInt(p.times_purchased),
         })),
-        coupons_used: couponsResult.rows,
+        coupons_used: couponsRows,
       },
     })
   } catch (error) {
@@ -249,42 +248,42 @@ export const getUserStats = async (req, res) => {
       message: "Error al obtener estadísticas",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Cancelar orden (solo si está pendiente)
 export const cancelOrder = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
-    await client.query("BEGIN")
+    await connection.query("BEGIN")
 
     const { id } = req.params
     const userId = req.user.id
 
     // Verificar que la orden existe y pertenece al usuario
-    const orderResult = await client.query(
+    const [orderRows] = await connection.query(
       `
       SELECT id, user_id, status
       FROM orders
-      WHERE id = $1
+      WHERE id = ?
     `,
       [id],
     )
 
-    if (orderResult.rows.length === 0) {
-      await client.query("ROLLBACK")
+    if (orderRows.length === 0) {
+      await connection.query("ROLLBACK")
       return res.status(404).json({
         success: false,
         message: "Orden no encontrada",
       })
     }
 
-    const order = orderResult.rows[0]
+    const order = orderRows[0]
 
     if (order.user_id !== userId) {
-      await client.query("ROLLBACK")
+      await connection.query("ROLLBACK")
       return res.status(403).json({
         success: false,
         message: "No tienes permiso para cancelar esta orden",
@@ -292,7 +291,7 @@ export const cancelOrder = async (req, res) => {
     }
 
     if (order.status !== "pending") {
-      await client.query("ROLLBACK")
+      await connection.query("ROLLBACK")
       return res.status(400).json({
         success: false,
         message: "Solo se pueden cancelar órdenes pendientes",
@@ -300,58 +299,58 @@ export const cancelOrder = async (req, res) => {
     }
 
     // Obtener items de la orden para restaurar stock
-    const itemsResult = await client.query(
+    const [itemsResult] = await connection.query(
       `
       SELECT product_id, quantity
       FROM order_items
-      WHERE order_id = $1
+      WHERE order_id = ?
     `,
       [id],
     )
 
     // Restaurar stock
-    for (const item of itemsResult.rows) {
-      await client.query(
+    for (const item of itemsResult) {
+      await connection.query(
         `
         UPDATE products
-        SET stock = stock + $1
-        WHERE id = $2
+        SET stock = stock + ?
+        WHERE id = ?
       `,
         [item.quantity, item.product_id],
       )
     }
 
     // Cancelar orden
-    await client.query(
+    await connection.query(
       `
       UPDATE orders
       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
+      WHERE id = ?
     `,
       [id],
     )
 
-    await client.query("COMMIT")
+    await connection.query("COMMIT")
 
     res.json({
       success: true,
       message: "Orden cancelada exitosamente",
     })
   } catch (error) {
-    await client.query("ROLLBACK")
+    await connection.query("ROLLBACK")
     console.error("Error cancelando orden:", error)
     res.status(500).json({
       success: false,
       message: "Error al cancelar orden",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Obtener todas las órdenes
 export const getAllOrders = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { status, user_id, limit, offset } = req.query
@@ -398,17 +397,17 @@ export const getAllOrders = async (req, res) => {
       query += ` OFFSET $${params.length}`
     }
 
-    const result = await client.query(query, params)
+    const result = await connection.query(query, params)
 
-    const countQuery = `SELECT COUNT(*) FROM orders WHERE 1=1${status ? " AND status = $1" : ""}`
+    const countQuery = `SELECT COUNT(*) FROM orders WHERE 1=1${status ? " AND status = ?" : ""}`
     const countParams = status ? [status] : []
-    const countResult = await client.query(countQuery, countParams)
-    const total = Number.parseInt(countResult.rows[0].count)
+    const countResult = await connection.query(countQuery, countParams)
+    const total = Number.parseInt(countResult[0][0].count)
 
     res.json({
       success: true,
       data: {
-        orders: result.rows.map((order) => ({
+        orders: result[0].map((order) => ({
           ...order,
           items_count: Number.parseInt(order.items_count),
         })),
@@ -424,13 +423,13 @@ export const getAllOrders = async (req, res) => {
       message: "Error al obtener órdenes",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Admin: Actualizar estado de orden
 export const updateOrderStatus = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
@@ -445,17 +444,15 @@ export const updateOrderStatus = async (req, res) => {
       })
     }
 
-    const result = await client.query(
+    const result = await connection.query(
       `
       UPDATE orders
-      SET status = $1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      RETURNING *
-    `,
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? `,
       [status, id],
     )
 
-    if (result.rows.length === 0) {
+    if (result[0].length === 0) {
       return res.status(404).json({
         success: false,
         message: "Orden no encontrada",
@@ -466,7 +463,7 @@ export const updateOrderStatus = async (req, res) => {
       success: true,
       message: "Estado de orden actualizado",
       data: {
-        order: result.rows[0],
+        order: result[0][0],
       },
     })
   } catch (error) {
@@ -476,6 +473,6 @@ export const updateOrderStatus = async (req, res) => {
       message: "Error al actualizar estado de orden",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }

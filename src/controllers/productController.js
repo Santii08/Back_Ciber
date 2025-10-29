@@ -2,7 +2,7 @@ import pool from "../config/database.js"
 
 // Obtener todos los productos
 export const getAllProducts = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { active, limit, offset } = req.query
@@ -21,7 +21,7 @@ export const getAllProducts = async (req, res) => {
     // Filtrar por activos si se especifica
     if (active !== undefined) {
       params.push(active === "true")
-      query += ` AND p.active = $${params.length}`
+      query += ` AND p.active = ?`
     }
 
     query += `
@@ -32,24 +32,24 @@ export const getAllProducts = async (req, res) => {
     // Paginación
     if (limit) {
       params.push(Number.parseInt(limit))
-      query += ` LIMIT $${params.length}`
+      query += ` LIMIT ?`
     }
 
     if (offset) {
       params.push(Number.parseInt(offset))
-      query += ` OFFSET $${params.length}`
+      query += ` OFFSET ?`
     }
 
-    const result = await client.query(query, params)
+    const [result] = await connection.query(query, params)
 
     // Obtener total de productos
-    const countResult = await client.query("SELECT COUNT(*) FROM products WHERE active = true")
-    const total = Number.parseInt(countResult.rows[0].count)
+    const [countResult] = await connection.query("SELECT COUNT(*) as count FROM products WHERE active = true")
+    const total = Number.parseInt(countResult[0].count)
 
     res.json({
       success: true,
       data: {
-        products: result.rows.map((p) => ({
+        products: result.map((p) => ({
           ...p,
           average_rating: Number.parseFloat(p.average_rating).toFixed(1),
           comment_count: Number.parseInt(p.comment_count),
@@ -66,19 +66,19 @@ export const getAllProducts = async (req, res) => {
       message: "Error al obtener productos",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Obtener producto por ID con comentarios
 export const getProductById = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
 
     // Obtener producto
-    const productResult = await client.query(
+    const [productResult] = await connection.query(
       `
       SELECT 
         p.*,
@@ -86,23 +86,23 @@ export const getProductById = async (req, res) => {
         COALESCE(AVG(c.rating), 0) as average_rating
       FROM products p
       LEFT JOIN comments c ON p.id = c.product_id
-      WHERE p.id = $1
+      WHERE p.id = ?
       GROUP BY p.id
     `,
       [id],
     )
 
-    if (productResult.rows.length === 0) {
+    if (productResult.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Producto no encontrado",
       })
     }
 
-    const product = productResult.rows[0]
+    const product = productResult[0]
 
     // Obtener comentarios del producto
-    const commentsResult = await client.query(
+    const [commentsResult] = await connection.query(
       `
       SELECT 
         c.*,
@@ -110,7 +110,7 @@ export const getProductById = async (req, res) => {
         u.photo as user_photo
       FROM comments c
       JOIN users u ON c.user_id = u.id
-      WHERE c.product_id = $1
+      WHERE c.product_id = ?
       ORDER BY c.created_at DESC
     `,
       [id],
@@ -124,7 +124,7 @@ export const getProductById = async (req, res) => {
           average_rating: Number.parseFloat(product.average_rating).toFixed(1),
           comment_count: Number.parseInt(product.comment_count),
         },
-        comments: commentsResult.rows,
+        comments: commentsResult,
       },
     })
   } catch (error) {
@@ -134,31 +134,35 @@ export const getProductById = async (req, res) => {
       message: "Error al obtener producto",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Crear producto (admin)
 export const createProduct = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { name, description, price, stock, image_url } = req.body
 
-    const result = await client.query(
+    const [insertResult] = await connection.query(
       `
       INSERT INTO products (name, description, price, stock, image_url, active)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `,
+      VALUES (?, ?, ?, ?, ?, ?) `,
       [name, description, price, stock || 0, image_url || null, true],
+    )
+
+    // Obtener el producto insertado
+    const [productRows] = await connection.query(
+      "SELECT * FROM products WHERE id = ?",
+      [insertResult.insertId]
     )
 
     res.status(201).json({
       success: true,
       message: "Producto creado exitosamente",
       data: {
-        product: result.rows[0],
+        product: productRows[0],
       },
     })
   } catch (error) {
@@ -168,22 +172,22 @@ export const createProduct = async (req, res) => {
       message: "Error al crear producto",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Actualizar producto (admin)
 export const updateProduct = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
     const { name, description, price, stock, image_url, active } = req.body
 
     // Verificar que el producto existe
-    const checkResult = await client.query("SELECT id FROM products WHERE id = $1", [id])
+    const [checkResult] = await connection.query("SELECT id FROM products WHERE id = ?", [id])
 
-    if (checkResult.rows.length === 0) {
+    if (checkResult.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Producto no encontrado",
@@ -193,31 +197,30 @@ export const updateProduct = async (req, res) => {
     // Construir query dinámicamente
     const updates = []
     const params = []
-    let paramCount = 1
 
     if (name !== undefined) {
       params.push(name)
-      updates.push(`name = $${paramCount++}`)
+      updates.push(`name = ?`)
     }
     if (description !== undefined) {
       params.push(description)
-      updates.push(`description = $${paramCount++}`)
+      updates.push(`description = ?`)
     }
     if (price !== undefined) {
       params.push(price)
-      updates.push(`price = $${paramCount++}`)
+      updates.push(`price = ?`)
     }
     if (stock !== undefined) {
       params.push(stock)
-      updates.push(`stock = $${paramCount++}`)
+      updates.push(`stock = ?`)
     }
     if (image_url !== undefined) {
       params.push(image_url)
-      updates.push(`image_url = $${paramCount++}`)
+      updates.push(`image_url = ?`)
     }
     if (active !== undefined) {
       params.push(active)
-      updates.push(`active = $${paramCount++}`)
+      updates.push(`active = ?`)
     }
 
     if (updates.length === 0) {
@@ -231,17 +234,21 @@ export const updateProduct = async (req, res) => {
     const query = `
       UPDATE products
       SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $${paramCount}
-      RETURNING *
-    `
+      WHERE id = ? `
 
-    const result = await client.query(query, params)
+    await connection.query(query, params)
+
+    // Obtener el producto actualizado
+    const [updatedProduct] = await connection.query(
+      "SELECT * FROM products WHERE id = ?",
+      [id]
+    )
 
     res.json({
       success: true,
       message: "Producto actualizado exitosamente",
       data: {
-        product: result.rows[0],
+        product: updatedProduct[0],
       },
     })
   } catch (error) {
@@ -251,21 +258,21 @@ export const updateProduct = async (req, res) => {
       message: "Error al actualizar producto",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }
 
 // Eliminar producto (admin) - soft delete
 export const deleteProduct = async (req, res) => {
-  const client = await pool.connect()
+  const connection = await pool.getConnection()
 
   try {
     const { id } = req.params
 
     // Verificar que el producto existe
-    const checkResult = await client.query("SELECT id FROM products WHERE id = $1", [id])
+    const [checkResult] = await connection.query("SELECT id FROM products WHERE id = ?", [id])
 
-    if (checkResult.rows.length === 0) {
+    if (checkResult.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Producto no encontrado",
@@ -273,11 +280,11 @@ export const deleteProduct = async (req, res) => {
     }
 
     // Soft delete - marcar como inactivo
-    await client.query(
+    await connection.query(
       `
       UPDATE products
       SET active = false, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1
+      WHERE id = ?
     `,
       [id],
     )
@@ -293,6 +300,6 @@ export const deleteProduct = async (req, res) => {
       message: "Error al eliminar producto",
     })
   } finally {
-    client.release()
+    connection.release()
   }
 }

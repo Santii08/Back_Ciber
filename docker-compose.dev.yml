@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # Servicio de Base de Datos MySQL
+  db:
+    image: mysql:8.0
+    container_name: arepabuelas_db_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root_password_123}
+      MYSQL_DATABASE: ${DB_NAME:-arepabuelas_db}
+      MYSQL_USER: ${DB_USER:-arepabuelas_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-root_password_123}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data_dev:/var/lib/mysql
+      - ./src/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - arepabuelas_network_dev
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-root_password_123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Servicio de Backend API (Modo Desarrollo)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: arepabuelas_backend_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: ${PORT:-3001}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-arepabuelas_db}
+      DB_USER: ${DB_USER:-arepabuelas_user}
+      DB_PASSWORD: ${DB_PASSWORD:-root_password_123}
+      JWT_SECRET: ${JWT_SECRET:-tu_jwt_secret_super_seguro_cambialo_en_produccion}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    ports:
+      - "${PORT:-3001}:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - arepabuelas_network_dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+        echo 'Esperando a que la base de datos esté lista...' &&
+        sleep 10 &&
+        echo 'Ejecutando migraciones...' &&
+        node src/database/migrate.js &&
+        echo 'Poblando base de datos...' &&
+        node src/database/seed.js &&
+        echo 'Iniciando servidor en modo desarrollo...' &&
+        npm run dev
+      "
+
+networks:
+  arepabuelas_network_dev:
+    driver: bridge
+
+volumes:
+  mysql_data_dev:
+    driver: local

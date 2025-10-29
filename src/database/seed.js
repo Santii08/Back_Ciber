@@ -5,19 +5,19 @@ import dotenv from "dotenv"
 dotenv.config()
 
 async function seedDatabase() {
-  const client = await pool.connect()
+  let connection
 
   try {
+    connection = await pool.getConnection()
     console.log("🌱 Iniciando seed de la base de datos...")
 
     // 1. Crear usuario administrador
     const adminPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD || "Admin123!Arepabuelas", 10)
 
-    await client.query(
+    await connection.query(
       `
-      INSERT INTO users (name, email, password_hash, role, validated, photo)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (email) DO NOTHING
+      INSERT IGNORE INTO users (name, email, password_hash, role, validated, photo)
+      VALUES (?, ?, ?, ?, ?, ?)
     `,
       [
         "Camarón A-Panado",
@@ -83,10 +83,10 @@ async function seedDatabase() {
     ]
 
     for (const product of products) {
-      await client.query(
+      await connection.query(
         `
         INSERT INTO products (name, description, price, stock, image_url, active)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
         [product.name, product.description, product.price, product.stock, product.image, true],
       )
@@ -95,11 +95,10 @@ async function seedDatabase() {
     console.log(`✅ ${products.length} productos creados`)
 
     // 3. Crear cupón para nuevos usuarios
-    await client.query(
+    await connection.query(
       `
-      INSERT INTO coupons (code, discount, description, max_uses, active)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (code) DO NOTHING
+      INSERT IGNORE INTO coupons (code, discount, description, max_uses, active)
+      VALUES (?, ?, ?, ?, ?)
     `,
       [
         "BIENVENIDO2024",
@@ -110,11 +109,10 @@ async function seedDatabase() {
       ],
     )
 
-    await client.query(
+    await connection.query(
       `
-      INSERT INTO coupons (code, discount, description, max_uses, active)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (code) DO NOTHING
+      INSERT IGNORE INTO coupons (code, discount, description, max_uses, active)
+      VALUES (?, ?, ?, ?, ?)
     `,
       ["ABUELA10", 10, "Cupón especial de las abuelas - 10% de descuento", 500, true],
     )
@@ -122,19 +120,19 @@ async function seedDatabase() {
     console.log("✅ Cupones creados")
 
     // 4. Crear algunos comentarios de ejemplo
-    const adminResult = await client.query("SELECT id FROM users WHERE email = $1", [
+    const [adminResult] = await connection.query("SELECT id FROM users WHERE email = ?", [
       process.env.ADMIN_EMAIL || "admin@arepabuelas.com",
     ])
 
-    if (adminResult.rows.length > 0) {
-      const adminId = adminResult.rows[0].id
-      const productResult = await client.query("SELECT id FROM products LIMIT 3")
+    if (adminResult.length > 0) {
+      const adminId = adminResult[0].id
+      const [productResult] = await connection.query("SELECT id FROM products LIMIT 3")
 
-      for (const product of productResult.rows) {
-        await client.query(
+      for (const product of productResult) {
+        await connection.query(
           `
           INSERT INTO comments (user_id, product_id, content, rating)
-          VALUES ($1, $2, $3, $4)
+          VALUES (?, ?, ?, ?)
         `,
           [
             adminId,
@@ -156,7 +154,7 @@ async function seedDatabase() {
     console.error("❌ Error en seed:", error)
     throw error
   } finally {
-    client.release()
+    if (connection) connection.release()
     await pool.end()
   }
 }
