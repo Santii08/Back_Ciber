@@ -5,9 +5,18 @@ import pool from "../config/database.js"
 export const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers["authorization"]
-    const token = authHeader && authHeader.split(" ")[1] // Bearer TOKEN
+    
+    // Verificar que el header existe y no está vacío
+    if (!authHeader || authHeader.trim() === "" || authHeader === "Bearer " || authHeader === "Bearer") {
+      return res.status(401).json({
+        success: false,
+        message: "Token de autenticación requerido",
+      })
+    }
+    
+    const token = authHeader.split(" ")[1] // Bearer TOKEN
 
-    if (!token) {
+    if (!token || token.trim() === "") {
       return res.status(401).json({
         success: false,
         message: "Token de autenticación requerido",

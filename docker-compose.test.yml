@@ -1,0 +1,61 @@
+services:
+  # Servicio de Base de Datos MySQL
+  db:
+    image: mysql:8.0
+    container_name: arepabuelas_db_test
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_123
+      MYSQL_DATABASE: arepabuelas_db
+      MYSQL_USER: arepabuelas_user
+      MYSQL_PASSWORD: root_password_123
+    ports:
+      - "3306:3306"
+    networks:
+      - arepabuelas_network_test
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password_123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Servicio de Backend API
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arepabuelas_backend_test
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: arepabuelas_db
+      DB_USER: arepabuelas_user
+      DB_PASSWORD: root_password_123
+      JWT_SECRET: tu_jwt_secret_super_seguro_cambialo_en_produccion
+      CORS_ORIGIN: "*"
+    ports:
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - arepabuelas_network_test
+    command: >
+      sh -c "
+        echo 'Esperando a que la base de datos esté lista...' &&
+        sleep 15 &&
+        echo 'Ejecutando migraciones...' &&
+        node src/database/migrate.js &&
+        echo 'Poblando base de datos...' &&
+        node src/database/seed.js &&
+        echo 'Iniciando servidor...' &&
+        node src/server.js
+      "
+
+networks:
+  arepabuelas_network_test:
+    driver: bridge

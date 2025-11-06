@@ -575,9 +575,9 @@
               "raw": "{\n  \"content\": \"Excelente producto, muy recomendado!\",\n  \"rating\": 5\n}"
             },
             "url": {
-              "raw": "{{base_url}}/api/products/{{product_id}}/comments",
+              "raw": "{{base_url}}/api/products/{{new_product_id}}/comments",
               "host": ["{{base_url}}"],
-              "path": ["api", "products", "{{product_id}}", "comments"]
+              "path": ["api", "products", "{{new_product_id}}", "comments"]
             }
           }
         },
@@ -605,9 +605,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/products/{{product_id}}/comments",
+              "raw": "{{base_url}}/api/products/{{new_product_id}}/comments",
               "host": ["{{base_url}}"],
-              "path": ["api", "products", "{{product_id}}", "comments"]
+              "path": ["api", "products", "{{new_product_id}}", "comments"]
             }
           }
         }
@@ -650,7 +650,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"BIENVENIDO2024\"\n}"
+              "raw": "{\n  \"code\": \"ABUELA10\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/checkout/validate-coupon",
@@ -739,7 +739,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"product_id\": {{product_id}},\n      \"quantity\": 2\n    }\n  ],\n  \"coupon_code\": \"BIENVENIDO2024\",\n  \"payment_token\": \"tok_test_{{$timestamp}}\",\n  \"last4\": \"4242\",\n  \"expiry\": \"12/25\",\n  \"card_type\": \"visa\"\n}"
+              "raw": "{\n  \"items\": [\n    {\n      \"product_id\": {{new_product_id}},\n      \"quantity\": 2\n    }\n  ],\n  \"coupon_code\": \"ABUELA10\",\n  \"payment_token\": \"tok_test_{{$timestamp}}\",\n  \"last4\": \"4242\",\n  \"expiry\": \"12/25\",\n  \"card_type\": \"visa\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/checkout",
@@ -880,6 +880,9 @@
             }
           ],
           "request": {
+            "auth": {
+              "type": "noauth"
+            },
             "method": "GET",
             "header": [
               {
@@ -915,6 +918,9 @@
             }
           ],
           "request": {
+            "auth": {
+              "type": "noauth"
+            },
             "method": "GET",
             "header": [
               {
